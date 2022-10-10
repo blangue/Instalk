@@ -106,13 +106,16 @@ fn main() -> std::io::Result<()>{
                 },
                 //Cas d'un nouveau client
                 Action::AjoutParticipant(participant) => {
+                    let canal_participant = participant.messagerie.clone();
+                    canal_participant.send(format!("Sont connectés: {:?}\n", clients)).expect("Impossible d'envoyer le message");
                     clients.push(participant);
+                    
                 },
                 //Cas d'un client qui se déconnecte
                 Action::SuppParticipant(participant) => {
                     clients.retain(|client| client.nom != participant.nom);
-                    participant.messagerie.shutdown().expect("Impossible de fermer la messagerie");
-                    info!("Il rust: {:?}", clients);
+                    // participant.messagerie.shutdown().expect("Impossible de fermer la messagerie");
+                    debug!("Il reste: {:?}", clients);
                 },
             }
         }
@@ -151,7 +154,7 @@ fn main() -> std::io::Result<()>{
                         flux_vers_client.write(message.as_bytes()).unwrap();
                     },
                     Err(_) => {
-                        flux_vers_client.write(format!("Vous avez été déconnecté du serveur.\n").as_bytes()).unwrap();
+                        flux_vers_client.write(format!("Vous avez été déconnecté du serveur. Appuyez sur Enter pour quitter.\n").as_bytes()).unwrap();
                         break;
                     },
                 }
