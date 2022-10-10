@@ -11,11 +11,13 @@ use colored::Colorize;
 use log::{Level, LevelFilter, Metadata, Record};
 
 /* Nécessaire au serveur */
-use std::io::{Read,Write, BufRead, BufReader};
-use std::net::{TcpListener, TcpStream};
+use std::io::{Write, BufRead, BufReader};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::env;
 use std::thread;
+
+const QUIT_STRING : &str = "!q";
 
 struct OurLogger;
 impl log::Log for OurLogger {
@@ -53,8 +55,13 @@ impl Participant {
         }
     }
 }
+impl std::fmt::Debug for Participant {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.nom)
+    }
+}
 
-/* Action possibles du master */
+/* Actions possibles du master */
 enum Action {
     Message(String, Participant),
     AjoutParticipant(Participant),
@@ -93,7 +100,7 @@ fn main() -> std::io::Result<()>{
                     //Relai du message à tous les autres participants
                     for client in &clients {
                         if client.nom != auteur.nom {
-                            client.messagerie.send(format!("{}: {}\n", auteur.nom, message.clone()));
+                            client.messagerie.send(format!("{}: {}\n", auteur.nom, message.clone())).expect("Impossible d'envoyer le message");
                         }
                     }
                 },
@@ -104,6 +111,8 @@ fn main() -> std::io::Result<()>{
                 //Cas d'un client qui se déconnecte
                 Action::SuppParticipant(participant) => {
                     clients.retain(|client| client.nom != participant.nom);
+                    participant.messagerie.shutdown().expect("Impossible de fermer la messagerie");
+                    info!("Il rust: {:?}", clients);
                 },
             }
         }
@@ -115,7 +124,14 @@ fn main() -> std::io::Result<()>{
         let vers_serveur = vers_serveur.clone();
         let (vers_clients, au_client) = mpsc::channel();
         
+        //Ajout du participant
         vers_serveur.send(Action::AjoutParticipant(
+            Participant::new(format!("Client {}", id), vers_clients.clone()
+        ))).expect("Problème lors de l'ajout du client.");
+
+        //Annonce du nouveau participant
+        vers_serveur.send(Action::Message(
+            format!("Connexion."),
             Participant::new(format!("Client {}", id), vers_clients.clone()
         ))).expect("Problème lors de l'ajout du client.");
         
@@ -128,22 +144,47 @@ fn main() -> std::io::Result<()>{
         thread::spawn(move ||{
             flux_vers_client.write(format!("Bienvenue sur le serveur! Vous êtes le Client {}\n", id).as_bytes()).unwrap();
             loop {
-                let message = au_client.recv().unwrap();
-                flux_vers_client.write(message.as_bytes()).unwrap();
-                debug!("Message envoyé au client {} : {}\n", id, message);
+                let message = au_client.recv();
+                match message {
+                    Ok(ref message) => {
+                        debug!("Message envoyé au Client {} :'{}'\n", id, message);
+                        flux_vers_client.write(message.as_bytes()).unwrap();
+                    },
+                    Err(_) => {
+                        flux_vers_client.write(format!("Vous avez été déconnecté du serveur.\n").as_bytes()).unwrap();
+                        break;
+                    },
+                }
             }
         });
         
         /* Thread de réception des messages émis par le nouveau client */
         thread::spawn(move ||{
-            let mut buffer = BufReader::new(flux_vers_serveur);
-            let mut message = String::new();
-            for ligne in buffer.lines(){
-                match ligne {
-                    Ok(ligne) => {
-                        debug!("Message reçu du Client {} : {}\nTransmission aux autres en cours...\n", id, ligne);
-                        let canal_sortant = vers_serveur.clone();
-                        canal_sortant.send(Action::Message(ligne, Participant::new(format!("Client {}", id), vers_clients.clone()))).expect("Problème lors de la transmission du message.");
+            let buffer = BufReader::new(flux_vers_serveur);
+            for message in buffer.lines(){
+                match message {
+                    Ok(message) => {
+                        match message.as_str() {
+                            //Cas d'une déconnexion
+                            QUIT_STRING => {
+                                info!("Client {} déconnecté.", id);
+                                vers_serveur.send(Action::SuppParticipant(
+                                    Participant::new(format!("Client {}", id), vers_clients.clone()
+                                ))).expect("Problème lors de la déconnexion du client.");
+                                //on prévient les autres clients
+                                vers_serveur.send(Action::Message(
+                                    format!("déconnexion."),
+                                    Participant::new(format!("Client {}", id), vers_clients.clone()
+                                ))).expect("Problème lors de la déconnexion du client.");
+                                break;
+                            },
+                            _ => {
+                                //Cas d'un message
+                                debug!("Message reçu du Client {} : {}\nTransmission aux autres en cours...\n", id, message);
+                                let canal_sortant = vers_serveur.clone();
+                                canal_sortant.send(Action::Message(message, Participant::new(format!("Client {}", id), vers_clients.clone()))).expect("Problème lors de la transmission du message.");
+                            },
+                        }
                     },
                     Err(err) => {
                         error!("Erreur lors de la réception du message du Client {} : {}\n", id, err);
