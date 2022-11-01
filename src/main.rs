@@ -159,11 +159,13 @@ fn main() -> Result<(), String>{
                 let message = au_client.recv();
                 match message {
                     Ok(ref message) => { 
-                        send_client_tcp(&format!("{}",id), &mut flux_vers_client, message);
+                        send_client_tcp(&format!("{}",id), &mut flux_vers_client, message)?;
                     },
                     Err(_) => {
-                        send_client_tcp(&format!("{}",id), &mut flux_vers_client, &format!("Vous avez été déconnecté du serveur. Appuyez sur Enter pour quitter.\n"));
-                        let _ = flux_vers_client.shutdown(Shutdown::Both);
+                        send_client_tcp(&format!("{}",id), &mut flux_vers_client, &format!("Vous avez été déconnecté du serveur. Appuyez sur Enter pour quitter.\n"))?;
+                        flux_vers_client.shutdown(Shutdown::Both).map_err(|e| 
+                            format!("Echec de la fermeture du canal de communication : {}\n", e.kind())
+                        )?;
                         break;
                     },
                 }
@@ -181,7 +183,7 @@ fn main() -> Result<(), String>{
                             //Cas d'une déconnexion
                             QUIT_STRING => {
                                 info!("Client {} déconnecté.", id);
-                                send_server(&vers_serveur, Action::SuppParticipant(Participant::new(format!("Client {}", id), vers_clients.clone())));
+                                send_server(&vers_serveur, Action::SuppParticipant(Participant::new(format!("Client {}", id), vers_clients.clone())))?;
                                 //on prévient les autres clients
                                 vers_serveur.send(Action::Message(
                                     format!("déconnexion."),
@@ -200,11 +202,10 @@ fn main() -> Result<(), String>{
                                 )?
                             },
                         }
-                    },
-                    Err(err) => {
-                        error!("Erreur lors de la réception du message du Client {} : {}\n", id, err);
-                        break;
-                    },
+                    }, 
+                    Err(e) => {
+                        format!("Erreur lors de la réception du message du Client {} : {}\n", id, e.kind());
+                    }
                 }
             }
             Ok(())
@@ -216,24 +217,19 @@ fn main() -> Result<(), String>{
     
 }
 
-fn send_client_tcp(nom: &String, flux: &mut TcpStream, msg: &String) -> () {
-    match flux.write(msg.as_bytes()) {
-        Ok(_) => {
-            debug!("Message envoyé à {} :'{}'\n", nom, msg);
-        },
-        Err(_) => {
-            debug!("Erreur lors de l'envoi du message à {} :'{}'\n", nom, msg);
-        }
-    };
+fn send_client_tcp(nom: &String, flux: &mut TcpStream, msg: &String) -> Result<(), String> {
+    flux.write(msg.as_bytes()).map_err(|e|
+        format!("Erreur lors de l'envoi du message à {} :'{}'\nErreur : {}\n", nom, msg, e)
+    )?;
+    debug!("Message envoyé à {} :'{}'\n", nom, msg);
+    Ok(())
 }
 
-fn send_server(canal_comm: &mpsc::Sender<Action>, action: Action) -> () {
-    match canal_comm.send(action) {
-        Ok(_) => (),
-        Err(_) => {
-            debug!("Erreur de communication avec le serveur.");
-        }
-    };
+fn send_server(canal_comm: &mpsc::Sender<Action>, action: Action) -> Result<(), String> {
+    canal_comm.send(action).map_err(|e|
+        format!("Erreur de communication avec le serveur : {}", e)
+    )?;
+    Ok(())
 }
 
 fn welcome_client(flux_vers_client: &mut TcpStream, id: usize) -> Result<(), String> {
@@ -243,8 +239,10 @@ fn welcome_client(flux_vers_client: &mut TcpStream, id: usize) -> Result<(), Str
     Ok(())
 }
 
-fn get_port(arg: Vec<String>) -> Result<u16, std::num::ParseIntError> {
-    let port = arg[1].parse::<u16>()?;
+fn get_port(arg: Vec<String>) -> Result<u16, String> {
+    let port = arg[1].parse::<u16>().map_err(|e|
+        format!("Merci d'entrer un numéro entier de port : {}", e)
+    )?;
     Ok(port)
 }
 
