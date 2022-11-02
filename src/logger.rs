@@ -1,6 +1,6 @@
 
 use crate::colored::Colorize;
-use log::{Level, Metadata, Record};
+use log::{Level, LevelFilter, Metadata, Record};
 
 pub struct OurLogger;
 impl log::Log for OurLogger {
@@ -19,4 +19,9 @@ impl log::Log for OurLogger {
         }
     }
     fn flush(&self) {}
+}
+pub fn init_logger() -> Result<(), log::SetLoggerError> {
+    log::set_logger(&crate::logger::OurLogger)?;
+    log::set_max_level(LevelFilter::Trace);
+    Ok(())
 }

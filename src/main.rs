@@ -7,15 +7,11 @@ extern crate log;
 
 mod logger;
 
-//TODO: Implementer un trait
-//TODO: Rendre modulaire
-
 /* Nécessaire au serveur */
-use log::LevelFilter;
 use std::io::{Write, BufRead, BufReader};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::mpsc::{self, Sender};
-use std::{env};
+use std::env;
 use std::thread;
 
 use crate::message::Message;
@@ -24,9 +20,7 @@ mod message;
 const QUIT_STRING : &str = "!q";
 
 
-/* Code by Bastien LANGUE */
-
-/* Objet Participant */
+/* Struct Participant */
 //Définition du Participant
 pub struct Participant {
     nom: String,
@@ -37,18 +31,13 @@ impl Clone for Participant {
         Self { nom: self.nom.clone(), messagerie: self.messagerie.clone() }
     }
 }
-fn init_logger() -> Result<(), log::SetLoggerError> {
-    log::set_logger(&crate::logger::OurLogger)?;
-    log::set_max_level(LevelFilter::Trace);
-    Ok(())
-}
 
 //Constructeur du Participant
 impl Participant {
     pub fn new(nom: String, messagerie: mpsc::Sender<String>) -> Participant {
         Participant {
-            nom: nom,
-            messagerie: messagerie,
+            nom,
+            messagerie,
         }
     }
 }
@@ -74,9 +63,6 @@ impl MessageServer {
     fn new(canal_comm: mpsc::Sender<Action>, action: Action) -> MessageServer{
         MessageServer { canal_comm, action }
     }
-    fn set_action(&mut self, new_action : Action) {
-        self.action = new_action;
-    }
 }
 impl message::Message for MessageServer {
     fn send(&mut self) -> Result<(), String> {
@@ -95,9 +81,6 @@ struct MessageClient{
 impl MessageClient {
     fn new(nom: String, flux: Sender<String>, msg: String) -> MessageClient{
         MessageClient { nom, flux, msg }
-    }
-    fn set_message(&mut self, new_msg : String) {
-        self.msg = new_msg;
     }
 }
 impl message::Message for MessageClient {
@@ -137,7 +120,7 @@ impl message::Message for MessageClientTcp {
 /* -------------------- MAIN -------------------- */
 fn main() -> Result<(), String>{
     /* Configuration du logger amélioré */
-    match init_logger(){
+    match logger::init_logger(){
         Ok(_) => (),
         Err(_) => println!("Erreur lors de l'initialisation du logger"),
     }
