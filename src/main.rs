@@ -10,112 +10,19 @@ mod logger;
 /* Nécessaire au serveur */
 use std::io::{Write, BufRead, BufReader};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 use std::env;
 use std::thread;
 
-use crate::message::Message;
+/* Importation des modules */
 mod message;
+use crate::message::{Message, MessageClient, MessageClientTcp, MessageServer};
+mod participant;
+use crate::participant::Participant;
+mod action;
+use crate::action::Action;
 
 const QUIT_STRING : &str = "!q";
-
-
-/* Struct Participant */
-//Définition du Participant
-pub struct Participant {
-    nom: String,
-    messagerie : mpsc::Sender<String>,
-}
-impl Clone for Participant {
-    fn clone(&self) -> Self {
-        Self { nom: self.nom.clone(), messagerie: self.messagerie.clone() }
-    }
-}
-
-//Constructeur du Participant
-impl Participant {
-    pub fn new(nom: String, messagerie: mpsc::Sender<String>) -> Participant {
-        Participant {
-            nom,
-            messagerie,
-        }
-    }
-}
-impl std::fmt::Debug for Participant {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.nom)
-    }
-}
-
-/* Actions possibles du master */
-#[derive(Clone)]
-enum Action {
-    Message(String, Participant),
-    AjoutParticipant(Participant),
-    SuppParticipant(Participant),
-}
-/* Message types */
-struct MessageServer{
-    canal_comm: mpsc::Sender<Action>,
-    action: Action
-}
-impl MessageServer {
-    fn new(canal_comm: mpsc::Sender<Action>, action: Action) -> MessageServer{
-        MessageServer { canal_comm, action }
-    }
-}
-impl message::Message for MessageServer {
-    fn send(&mut self) -> Result<(), String> {
-        self.canal_comm.send(self.action.clone()).map_err(|e|
-            format!("Erreur de communication avec le serveur : {}", e)
-        )?;
-        Ok(())
-    }
-}
-
-struct MessageClient{
-    nom: String,
-    flux: Sender<String>,
-    msg: String
-}
-impl MessageClient {
-    fn new(nom: String, flux: Sender<String>, msg: String) -> MessageClient{
-        MessageClient { nom, flux, msg }
-    }
-}
-impl message::Message for MessageClient {
-    fn send(&mut self) -> Result<(), String> {
-        self.flux.send(self.msg.clone()).map_err(|e|
-            format!("Erreur lors de l'envoi du message à {} :'{}'\nErreur : {}\n", self.nom, self.msg, e)
-        )?;
-        debug!("Message envoyé à {} :'{}'\n", self.nom, self.msg);
-        Ok(())
-    }
-}
-
-struct MessageClientTcp{
-    nom: String,
-    flux: TcpStream,
-    msg: String
-}
-impl MessageClientTcp {
-    fn new(nom: String, flux: TcpStream, msg: String) -> MessageClientTcp{
-        MessageClientTcp { nom, flux, msg }
-    }
-    fn set_message(&mut self, new_msg : String) {
-        self.msg = new_msg;
-    }
-}
-impl message::Message for MessageClientTcp {
-    fn send(&mut self) -> Result<(), String> {
-        self.flux.write(self.msg.clone().as_bytes()).map_err(|e|
-            format!("Erreur lors de l'envoi du message à {} :'{}'\nErreur : {}\n", self.nom, self.msg, e)
-        )?;
-        debug!("Message envoyé à {} :'{}'\n", self.nom, self.msg);
-        Ok(())
-    }
-}
-
 
 /* -------------------- MAIN -------------------- */
 fn main() -> Result<(), String>{
