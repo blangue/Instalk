@@ -22,8 +22,10 @@ impl log::Log for OurLogger {
 }
 /* ############################## End of borrowed code ############################## */
 
-pub fn init_logger() -> Result<(), log::SetLoggerError> {
-    log::set_logger(&crate::logger::OurLogger)?;
+pub fn init_logger() -> Result<(), String> {
+    log::set_logger(&crate::logger::OurLogger).map_err(|e|
+        format!("Erreur lors de l'initialisation du logger : {}\n", e)
+    )?;
     log::set_max_level(LevelFilter::Trace);
     Ok(())
 }

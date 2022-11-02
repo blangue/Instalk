@@ -1,4 +1,4 @@
-/* Nécessaire au logger personnalisé */
+/* Nécessaire au logger avançé */
 extern crate clap;
 extern crate colored;
 extern crate error_chain;
@@ -27,20 +27,11 @@ const QUIT_STRING : &str = "!q";
 /* -------------------- MAIN -------------------- */
 fn main() -> Result<(), String>{
     /* Configuration du logger amélioré */
-    match logger::init_logger(){
-        Ok(_) => (),
-        Err(_) => println!("Erreur lors de l'initialisation du logger"),
-    }
+    logger::init_logger()?;
     
     /* Récupération de l'argument PORT */
     let arg: Vec<String> = env::args().collect();
-    let port = match get_port(arg){
-        Ok(p) => p,
-        Err(_) => {
-            println!("Erreur lors de la récupération du port");
-            return Ok(());
-        }
-    };
+    let port = get_port(arg)?;
     info!("Démarrage du serveur sur le port {}.", port);
     
     /* Démarrage du serveur et de l'écoute du port */
@@ -201,6 +192,7 @@ fn welcome_client(flux_vers_client: &mut TcpStream, id: usize) -> Result<(), Str
 }
 
 fn get_port(arg: Vec<String>) -> Result<u16, String> {
+    if arg.len() != 2 {return Err(format!("Merci d'entrer un numéro de port en argument"));}
     let port = arg[1].parse::<u16>().map_err(|e|
         format!("Merci d'entrer un numéro entier de port : {}", e)
     )?;
