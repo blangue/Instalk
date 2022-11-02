@@ -7,7 +7,6 @@ extern crate log;
 
 mod logger;
 
-//TODO: Finir gestion d'erreur + tout remonter en String avec map_err()
 //TODO: Implementer un trait
 //TODO: Rendre modulaire
 
@@ -15,9 +14,12 @@ mod logger;
 use log::LevelFilter;
 use std::io::{Write, BufRead, BufReader};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Sender};
 use std::{env};
 use std::thread;
+
+use crate::message::Message;
+mod message;
 
 const QUIT_STRING : &str = "!q";
 
@@ -29,6 +31,11 @@ const QUIT_STRING : &str = "!q";
 pub struct Participant {
     nom: String,
     messagerie : mpsc::Sender<String>,
+}
+impl Clone for Participant {
+    fn clone(&self) -> Self {
+        Self { nom: self.nom.clone(), messagerie: self.messagerie.clone() }
+    }
 }
 fn init_logger() -> Result<(), log::SetLoggerError> {
     log::set_logger(&crate::logger::OurLogger)?;
@@ -52,11 +59,80 @@ impl std::fmt::Debug for Participant {
 }
 
 /* Actions possibles du master */
+#[derive(Clone)]
 enum Action {
     Message(String, Participant),
     AjoutParticipant(Participant),
     SuppParticipant(Participant),
 }
+/* Message types */
+struct MessageServer{
+    canal_comm: mpsc::Sender<Action>,
+    action: Action
+}
+impl MessageServer {
+    fn new(canal_comm: mpsc::Sender<Action>, action: Action) -> MessageServer{
+        MessageServer { canal_comm, action }
+    }
+    fn set_action(&mut self, new_action : Action) {
+        self.action = new_action;
+    }
+}
+impl message::Message for MessageServer {
+    fn send(&mut self) -> Result<(), String> {
+        self.canal_comm.send(self.action.clone()).map_err(|e|
+            format!("Erreur de communication avec le serveur : {}", e)
+        )?;
+        Ok(())
+    }
+}
+
+struct MessageClient{
+    nom: String,
+    flux: Sender<String>,
+    msg: String
+}
+impl MessageClient {
+    fn new(nom: String, flux: Sender<String>, msg: String) -> MessageClient{
+        MessageClient { nom, flux, msg }
+    }
+    fn set_message(&mut self, new_msg : String) {
+        self.msg = new_msg;
+    }
+}
+impl message::Message for MessageClient {
+    fn send(&mut self) -> Result<(), String> {
+        self.flux.send(self.msg.clone()).map_err(|e|
+            format!("Erreur lors de l'envoi du message à {} :'{}'\nErreur : {}\n", self.nom, self.msg, e)
+        )?;
+        debug!("Message envoyé à {} :'{}'\n", self.nom, self.msg);
+        Ok(())
+    }
+}
+
+struct MessageClientTcp{
+    nom: String,
+    flux: TcpStream,
+    msg: String
+}
+impl MessageClientTcp {
+    fn new(nom: String, flux: TcpStream, msg: String) -> MessageClientTcp{
+        MessageClientTcp { nom, flux, msg }
+    }
+    fn set_message(&mut self, new_msg : String) {
+        self.msg = new_msg;
+    }
+}
+impl message::Message for MessageClientTcp {
+    fn send(&mut self) -> Result<(), String> {
+        self.flux.write(self.msg.clone().as_bytes()).map_err(|e|
+            format!("Erreur lors de l'envoi du message à {} :'{}'\nErreur : {}\n", self.nom, self.msg, e)
+        )?;
+        debug!("Message envoyé à {} :'{}'\n", self.nom, self.msg);
+        Ok(())
+    }
+}
+
 
 /* -------------------- MAIN -------------------- */
 fn main() -> Result<(), String>{
@@ -97,19 +173,17 @@ fn main() -> Result<(), String>{
                     //Relai du message à tous les autres participants
                     for client in &clients {
                         if client.nom != auteur.nom {
-                            // send_client_sender(&client.nom, client.messagerie, &message);
-                            client.messagerie.send(format!("{}: {}\n", auteur.nom, message.clone())).map_err(|e|
-                                format!("Impossible d'envoyer le message : {}", e)
-                            )?;
+                            MessageClient::new(
+                                client.nom.clone(), 
+                                client.messagerie.clone(), 
+                                format!("{}: {}\n", auteur.nom, message.clone()
+                            )).send()?;
                         }
                     }
                 },
                 //Cas d'un nouveau client
                 Action::AjoutParticipant(participant) => {
-                    let canal_participant = participant.messagerie.clone();
-                    canal_participant.send(format!("Sont connectés: {:?}\n", clients)).map_err(|e|
-                        format!("Impossible d'envoyer le message : {}", e)
-                    )?;
+                    MessageClient::new(participant.nom.clone(), participant.messagerie.clone(), format!("Sont connectés: {:?}\n", clients)).send()?;
                     clients.push(participant);
                 },
                 //Cas d'un client qui se déconnecte
@@ -124,23 +198,26 @@ fn main() -> Result<(), String>{
     
     /* Gestion des nouvelles connexions */
     for (id, flux) in listener.incoming().enumerate() {
-        //Création du canal de communication avec le nouveau client
+        
+        // Création du canal de communication avec le nouveau client
         let vers_serveur = vers_serveur.clone();
         let (vers_clients, au_client) = mpsc::channel();
         
-        //Ajout du participant
-        vers_serveur.send(Action::AjoutParticipant(
-            Participant::new(format!("Client {}", id), vers_clients.clone()
-        ))).map_err(|e|
-            format!("Problème lors de l'ajout du client : {}", e)
-        )?;
-        
-        //Annonce du nouveau participant
-        vers_serveur.send(Action::Message(
+        // Ajout du participant
+        MessageServer::new(
+            vers_serveur.clone(),
+            Action::AjoutParticipant(Participant::new(format!("Client {}", id),
+            vers_clients.clone()
+        ))).send()?;
+
+        // Annonce du nouveau participant
+        MessageServer::new(vers_serveur.clone(),
+        Action::Message(
             format!("Connexion."),
-            Participant::new(format!("Client {}", id), vers_clients.clone()
-        ))).map_err(|e|
-            format!("Problème lors du message d'ajout du client : {}", e)
+            Participant::new(format!("Client {}", id),
+            vers_clients.clone()
+        ))).send().map_err(|e|
+            format!("Problème lors du message d'ajout du client :\n{}", e)
         )?;
         
         info!("Nouveau client connecté : Client {}\n", id);
@@ -157,12 +234,18 @@ fn main() -> Result<(), String>{
             welcome_client(&mut flux_vers_client, id)?;
             loop {
                 let message = au_client.recv();
+                let to_client = flux_vers_client.try_clone().map_err(|e|
+                    format!("Impossible de récupérer le flux vers le client : {}", e.kind())
+                )?;
+                let mut order = MessageClientTcp::new(format!("{}",id), to_client, String::new());
                 match message {
-                    Ok(ref message) => { 
-                        send_client_tcp(&format!("{}",id), &mut flux_vers_client, message)?;
+                    Ok(message) => { 
+                        order.set_message(message);
+                        order.send()?;
                     },
                     Err(_) => {
-                        send_client_tcp(&format!("{}",id), &mut flux_vers_client, &format!("Vous avez été déconnecté du serveur. Appuyez sur Enter pour quitter.\n"))?;
+                        order.set_message(format!("Vous avez été déconnecté du serveur. Appuyez sur Enter pour quitter.\n"));
+                        order.send()?;
                         flux_vers_client.shutdown(Shutdown::Both).map_err(|e| 
                             format!("Echec de la fermeture du canal de communication : {}\n", e.kind())
                         )?;
@@ -183,23 +266,26 @@ fn main() -> Result<(), String>{
                             //Cas d'une déconnexion
                             QUIT_STRING => {
                                 info!("Client {} déconnecté.", id);
-                                send_server(&vers_serveur, Action::SuppParticipant(Participant::new(format!("Client {}", id), vers_clients.clone())))?;
-                                //on prévient les autres clients
-                                vers_serveur.send(Action::Message(
+                                MessageServer::new(vers_serveur.clone(), Action::SuppParticipant(
+                                    Participant::new(format!("Client {}", id),
+                                    vers_clients.clone()
+                                ))).send()?;
+                                //On prévient les autres clients
+                                MessageServer::new(vers_serveur.clone(), Action::Message(
                                     format!("déconnexion."),
                                     Participant::new(format!("Client {}", id), vers_clients.clone()
-                                ))).map_err(|e|
-                                    format!("Impossible d'envoyer le message : {}", e)
-                                )?;
+                                ))).send()?;
                                 break;
                             },
                             _ => {
                                 //Cas d'un message
                                 debug!("Message reçu du Client {} : {}\nTransmission aux autres en cours...\n", id, message);
                                 let canal_sortant = vers_serveur.clone();
-                                canal_sortant.send(Action::Message(message, Participant::new(format!("Client {}", id), vers_clients.clone()))).map_err(|e|
-                                    format!("Impossible d'envoyer le message : {}", e)
-                                )?
+                                MessageServer::new(canal_sortant, Action::Message(
+                                    message, 
+                                    Participant::new(format!("Client {}", id), 
+                                    vers_clients.clone()
+                                ))).send()?;
                             },
                         }
                     }, 
@@ -215,21 +301,6 @@ fn main() -> Result<(), String>{
     
     Ok(())
     
-}
-
-fn send_client_tcp(nom: &String, flux: &mut TcpStream, msg: &String) -> Result<(), String> {
-    flux.write(msg.as_bytes()).map_err(|e|
-        format!("Erreur lors de l'envoi du message à {} :'{}'\nErreur : {}\n", nom, msg, e)
-    )?;
-    debug!("Message envoyé à {} :'{}'\n", nom, msg);
-    Ok(())
-}
-
-fn send_server(canal_comm: &mpsc::Sender<Action>, action: Action) -> Result<(), String> {
-    canal_comm.send(action).map_err(|e|
-        format!("Erreur de communication avec le serveur : {}", e)
-    )?;
-    Ok(())
 }
 
 fn welcome_client(flux_vers_client: &mut TcpStream, id: usize) -> Result<(), String> {
